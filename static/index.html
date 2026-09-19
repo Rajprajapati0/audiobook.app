@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audiobook App — Phase 5</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <main>
+        <h1>📚 Audiobook App</h1>
+
+        <section>
+            <h2>Upload a PDF</h2>
+            <input type="file" id="pdfInput" accept="application/pdf" />
+            <button id="uploadButton">Upload & Extract</button>
+            <p id="uploadStatus"></p>
+            <div id="uploadResult"></div>
+        </section>
+
+        <hr />
+
+        <section>
+            <h2>Voice</h2>
+            <select id="voiceSelect" onchange="selectedVoice = this.value"></select>
+        </section>
+
+        <section id="playerBar" style="display: none;">
+            <h2>🎧 Now Playing</h2>
+            <p id="nowPlayingLabel"></p>
+            <audio id="masterPlayer" controls></audio>
+            <div>
+                <button onclick="playerPrevChunk()">⏮ Prev Chunk</button>
+                <button onclick="playerNextChunk()">⏭ Next Chunk</button>
+                <label>
+                    Speed:
+                    <select id="speedSelect" onchange="document.getElementById('masterPlayer').playbackRate = parseFloat(this.value)">
+                        <option value="0.75">0.75x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                    </select>
+                </label>
+            </div>
+        </section>
+
+        <hr />
+
+        <section>
+            <h2>My Library</h2>
+            <button id="refreshLibraryButton">Refresh Library</button>
+            <div id="libraryList"></div>
+        </section>
+
+        <hr />
+
+        <section>
+            <div id="chaptersHeader"></div>
+            <div id="chaptersList">
+                <p class="placeholder">No book selected. Click "View Chapters" on a book above to see its chapters here.</p>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        let selectedVoice = "en-US-AriaNeural";
+
+        const pdfInput = document.getElementById("pdfInput");
+        const uploadButton = document.getElementById("uploadButton");
+        const uploadStatus = document.getElementById("uploadStatus");
+        const uploadResult = document.getElementById("uploadResult");
+        const chaptersHeader = document.getElementById("chaptersHeader");
+        const chaptersList = document.getElementById("chaptersList");
+
+        uploadButton.addEventListener("click", async () => {
+            const file = pdfInput.files[0];
+            if (!file) {
+                uploadStatus.textContent = "❌ Please choose a PDF file first.";
+                return;
+            }
+
+            uploadStatus.textContent = "Uploading, extracting, cleaning, and saving...";
+            uploadResult.innerHTML = "";
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            try {
+                const response = await fetch("/api/upload", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    uploadStatus.textContent = "❌ " + (data.detail || "Upload failed.");
+                    return;
+                }
+
+                uploadStatus.textContent = "✅ " + data.message;
+                uploadResult.innerHTML = `
+                    <p><strong>Filename:</strong> ${data.filename}</p>
+                    <p><strong>Pages:</strong> ${data.pages}</p>
+                    <p><strong>Chapter detection method:</strong> ${data.detection_method}</p>
+                    <button onclick="viewBook(${data.book_id})">View Chapters</button>
+                `;
+
+                loadLibrary(); // refresh the library list since we just added a new book
+            } catch (error) {
+                uploadStatus.textContent = "❌ Something went wrong contacting the server.";
+                console.error(error);
+            }
+        });
+
+        function renderChapters(bookId, filename, chapters) {
+            chaptersHeader.innerHTML = `
+                <h2>Viewing: ${filename}</h2>
+                <button onclick="hideChapters()">Hide Chapters</button>
+            `;
+
+            if (!chapters || chapters.length === 0) {
+                chaptersList.innerHTML = "<p>No chapters found for this book.</p>";
+                return;
+            }
+
+            let html = "";
+            chapters.forEach((chap) => {
+                const flagBadge = chap.flagged
+                    ? `<p class="flag-badge">⚠️ ${chap.flag_reason}</p>`
+                    : "";
+
+                const approveBadge = chap.approved
+                    ? `<button class="approved-btn" onclick="setApproval(${bookId}, ${chap.chapter_index}, false)">✅ Approved (click to undo)</button>`
+                    : `<button onclick="setApproval(${bookId}, ${chap.chapter_index}, true)">Approve this chapter</button>`;
+
+                html += `
+                    <div class="chapter-card">
+                        <p><strong>${chap.title}</strong></p>
+                        <p class="chapter-meta">Pages ${chap.start_page}–${chap.end_page} · ${chap.paragraph_count} paragraphs</p>
+                        ${flagBadge}
+                        <button onclick="playChapter(${bookId}, ${chap.chapter_index}, '${chap.title.replace(/'/g, "\\'")}')">▶ Play This Chapter</button>
+                        <p class="chapter-preview" id="preview-${chap.chapter_index}">${chap.preview}...</p>
+                        <pre class="full-text" id="fulltext-${chap.chapter_index}" style="display: none;">${chap.content}</pre>
+                        <button onclick="toggleFullText(${chap.chapter_index})" id="toggle-btn-${chap.chapter_index}">Read Full Text</button>
+                        ${approveBadge}
+                        <br />
+                        <button onclick="generateChunks(${bookId}, ${chap.chapter_index})">Split into Chunks</button>
+                        <span id="chunk-status-${chap.chapter_index}"></span>
+                        <br />
+                        <button onclick="generateChapterAudio(${bookId}, ${chap.chapter_index})">🎙️ Generate Entire Chapter Audio</button>
+                        <button onclick="cancelChapterAudio(${bookId}, ${chap.chapter_index})" class="stop-btn">⏹ Stop</button>
+                        <span id="chapter-progress-${chap.chapter_index}"></span>
+                        <div id="chunks-container-${chap.chapter_index}" class="chunks-container"></div>
+                    </div>
+                `;
+            });
+            chaptersList.innerHTML = html;
+            chaptersHeader.scrollIntoView({ behavior: "smooth" });
+
+            // Show any chunks that were already generated previously
+            chapters.forEach((chap) => loadChunks(bookId, chap.chapter_index));
+        }
+
+        function toggleFullText(chapterIndex) {
+            const preview = document.getElementById(`preview-${chapterIndex}`);
+            const fullText = document.getElementById(`fulltext-${chapterIndex}`);
+            const button = document.getElementById(`toggle-btn-${chapterIndex}`);
+
+            const isShowingFull = fullText.style.display !== "none";
+            if (isShowingFull) {
+                fullText.style.display = "none";
+                preview.style.display = "block";
+                button.textContent = "Read Full Text";
+            } else {
+                fullText.style.display = "block";
+                preview.style.display = "none";
+                button.textContent = "Show Less";
+            }
+        }
+
+        async function setApproval(bookId, chapterIndex, approve) {
+            const endpoint = approve ? "approve" : "unapprove";
+            try {
+                await fetch(`/api/books/${bookId}/chapters/${chapterIndex}/${endpoint}`, {
+                    method: "POST",
+                });
+                viewBook(bookId); // reload so the button/badge updates
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        async function generateChunks(bookId, chapterIndex) {
+            const statusEl = document.getElementById(`chunk-status-${chapterIndex}`);
+            statusEl.textContent = " Splitting into chunks...";
+            try {
+                const response = await fetch(
+                    `/api/books/${bookId}/chapters/${chapterIndex}/chunk`,
+                    { method: "POST" }
+                );
+                const data = await response.json();
+                if (!response.ok) {
+                    statusEl.textContent = " ❌ " + (data.detail || "Failed to create chunks.");
+                    return;
+                }
+                statusEl.textContent = " ✅ " + data.message;
+                loadChunks(bookId, chapterIndex);
+            } catch (error) {
+                statusEl.textContent = " ❌ Something went wrong.";
+                console.error(error);
+            }
+        }
+
+        async function loadChunks(bookId, chapterIndex) {
+            const container = document.getElementById(`chunks-container-${chapterIndex}`);
+            try {
+                const response = await fetch(`/api/books/${bookId}/chapters/${chapterIndex}/chunks`);
+                const chunks = await response.json();
+
+                if (!chunks || chunks.length === 0) {
+                    container.innerHTML = "";
+                    return;
+                }
+
+                let html = `<p class="chapter-meta">${chunks.length} chunk(s)</p>`;
+                chunks.forEach((chunk) => {
+                    const status = chunk.status || "pending";
+                    const badge = `<span class="status-badge status-${status}">${status}</span>`;
+                    const player = (status === "completed" && chunk.audio_path)
+                        ? `<audio controls src="${chunk.audio_path}"></audio>`
+                        : "";
+                    const errorLine = (status === "failed" && chunk.error_message)
+                        ? `<p class="error-text">❌ ${chunk.error_message}</p>`
+                        : "";
+
+                    html += `
+                        <div class="chunk-card" id="chunk-card-${chapterIndex}-${chunk.chunk_index}">
+                            <p class="chunk-meta">Chunk ${chunk.chunk_index + 1} · ${chunk.char_count} characters ${badge}</p>
+                            <p class="chunk-text">${chunk.text}</p>
+                            ${errorLine}
+                            <button onclick="generateAudio(${bookId}, ${chapterIndex}, ${chunk.chunk_index})">Generate Audio</button>
+                            <span id="audio-status-${chapterIndex}-${chunk.chunk_index}"></span>
+                            <div id="audio-player-${chapterIndex}-${chunk.chunk_index}">${player}</div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = "<p>❌ Could not load chunks.</p>";
+                console.error(error);
+            }
+        }
+
+        async function generateAudio(bookId, chapterIndex, chunkIndex) {
+            const statusEl = document.getElementById(`audio-status-${chapterIndex}-${chunkIndex}`);
+            const playerEl = document.getElementById(`audio-player-${chapterIndex}-${chunkIndex}`);
+            statusEl.textContent = " Generating audio (this calls Microsoft's TTS service, needs internet)...";
+            try {
+                const response = await fetch(
+                    `/api/books/${bookId}/chapters/${chapterIndex}/chunks/${chunkIndex}/generate-audio?voice=${encodeURIComponent(selectedVoice)}`,
+                    { method: "POST" }
+                );
+                const data = await response.json();
+                if (!response.ok) {
+                    statusEl.textContent = " ❌ " + (data.detail || "Failed to generate audio.");
+                    return;
+                }
+                statusEl.textContent = " ✅ Done";
+                playerEl.innerHTML = `<audio controls src="${data.audio_url}"></audio>`;
+            } catch (error) {
+                statusEl.textContent = " ❌ Something went wrong.";
+                console.error(error);
+            }
+        }
+
+        async function loadVoices() {
+            try {
+                const response = await fetch("/api/voices");
+                const voices = await response.json();
+                const select = document.getElementById("voiceSelect");
+                select.innerHTML = voices
+                    .map((v) => `<option value="${v.short_name}" ${v.short_name === selectedVoice ? "selected" : ""}>${v.friendly_name} (${v.gender})</option>`)
+                    .join("");
+            } catch (error) {
+                console.error("Could not load voices", error);
+            }
+        }
+
+        async function generateChapterAudio(bookId, chapterIndex) {
+            const progressEl = document.getElementById(`chapter-progress-${chapterIndex}`);
+            progressEl.textContent = " Starting...";
+            try {
+                const response = await fetch(
+                    `/api/books/${bookId}/chapters/${chapterIndex}/generate-chapter-audio?voice=${encodeURIComponent(selectedVoice)}`,
+                    { method: "POST" }
+                );
+                const data = await response.json();
+                if (!response.ok) {
+                    progressEl.textContent = " ❌ " + (data.detail || "Failed to start.");
+                    return;
+                }
+                progressEl.textContent = " " + data.message;
+                pollChapterProgress(bookId, chapterIndex);
+            } catch (error) {
+                progressEl.textContent = " ❌ Something went wrong.";
+                console.error(error);
+            }
+        }
+
+        async function cancelChapterAudio(bookId, chapterIndex) {
+            const progressEl = document.getElementById(`chapter-progress-${chapterIndex}`);
+            try {
+                const response = await fetch(
+                    `/api/books/${bookId}/chapters/${chapterIndex}/cancel-generation`,
+                    { method: "POST" }
+                );
+                const data = await response.json();
+                progressEl.textContent = " " + data.message;
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        function pollChapterProgress(bookId, chapterIndex) {
+            const progressEl = document.getElementById(`chapter-progress-${chapterIndex}`);
+
+            const intervalId = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/books/${bookId}/chapters/${chapterIndex}/generation-status`);
+                    const statuses = await response.json();
+
+                    const total = statuses.length;
+                    const completed = statuses.filter((s) => s.status === "completed").length;
+                    const failed = statuses.filter((s) => s.status === "failed").length;
+                    const stillWorking = statuses.some((s) => s.status === "pending" || s.status === "processing");
+
+                    progressEl.textContent = ` ${completed}/${total} completed${failed > 0 ? `, ${failed} failed` : ""}`;
+
+                    // Refresh the chunk cards so badges/players update live
+                    loadChunks(bookId, chapterIndex);
+
+                    if (!stillWorking) {
+                        clearInterval(intervalId);
+                    }
+                } catch (error) {
+                    console.error(error);
+                    clearInterval(intervalId);
+                }
+            }, 2000);
+        }
+
+        function hideChapters() {
+            chaptersHeader.innerHTML = "";
+            chaptersList.innerHTML = '<p class="placeholder">No book selected. Click "View Chapters" on a book above to see its chapters here.</p>';
+        }
+
+        // --- Player logic ---
+        let playerBookId = null;
+        let playerChapterIndex = null;
+        let playerChapterTitle = "";
+        let playerQueue = [];
+        let playerPos = 0;
+
+        const masterPlayer = document.getElementById("masterPlayer");
+        const playerBar = document.getElementById("playerBar");
+        const nowPlayingLabel = document.getElementById("nowPlayingLabel");
+
+        async function playChapter(bookId, chapterIndex, chapterTitle, startChunkIndex = 0, startSeconds = 0) {
+            const response = await fetch(`/api/books/${bookId}/chapters/${chapterIndex}/chunks`);
+            const chunks = await response.json();
+            const playable = chunks.filter((c) => c.status === "completed" && c.audio_path);
+
+            if (playable.length === 0) {
+                alert("No generated audio yet for this chapter. Click 'Generate Entire Chapter Audio' first.");
+                return;
+            }
+
+            playerBookId = bookId;
+            playerChapterIndex = chapterIndex;
+            playerChapterTitle = chapterTitle;
+            playerQueue = playable;
+            playerPos = playable.findIndex((c) => c.chunk_index === startChunkIndex);
+            if (playerPos === -1) playerPos = 0;
+
+            playerBar.style.display = "block";
+            playerBar.scrollIntoView({ behavior: "smooth" });
+            loadPlayerChunk(startSeconds);
+        }
+
+        function updateNowPlayingLabel() {
+            const chunk = playerQueue[playerPos];
+            nowPlayingLabel.textContent = `${playerChapterTitle} — chunk ${chunk.chunk_index + 1} of ${playerQueue.length}`;
+        }
+
+        function loadPlayerChunk(startSeconds = 0) {
+            const chunk = playerQueue[playerPos];
+            masterPlayer.src = chunk.audio_path;
+            masterPlayer.currentTime = startSeconds || 0;
+            masterPlayer.play();
+            updateNowPlayingLabel();
+        }
+
+        masterPlayer.addEventListener("ended", () => {
+            if (playerPos < playerQueue.length - 1) {
+                playerPos++;
+                loadPlayerChunk(0);
+            }
+        });
+
+        function playerNextChunk() {
+            if (playerPos < playerQueue.length - 1) {
+                playerPos++;
+                loadPlayerChunk(0);
+            }
+        }
+
+        function playerPrevChunk() {
+            if (playerPos > 0) {
+                playerPos--;
+                loadPlayerChunk(0);
+            }
+        }
+
+        // Save listening progress periodically, and whenever playback is paused
+        let lastProgressSave = 0;
+        masterPlayer.addEventListener("timeupdate", () => {
+            const now = Date.now();
+            if (now - lastProgressSave > 5000) {
+                lastProgressSave = now;
+                saveProgress();
+            }
+        });
+        masterPlayer.addEventListener("pause", saveProgress);
+
+        async function saveProgress() {
+            if (playerBookId === null || playerQueue.length === 0) return;
+            const chunk = playerQueue[playerPos];
+            try {
+                await fetch(
+                    `/api/books/${playerBookId}/progress?chapter_index=${playerChapterIndex}&chunk_index=${chunk.chunk_index}&position_seconds=${masterPlayer.currentTime}`,
+                    { method: "POST" }
+                );
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        // --- Library logic ---
+        const refreshLibraryButton = document.getElementById("refreshLibraryButton");
+        const libraryList = document.getElementById("libraryList");
+
+        refreshLibraryButton.addEventListener("click", loadLibrary);
+
+        async function loadLibrary() {
+            libraryList.innerHTML = "Loading...";
+            try {
+                const response = await fetch("/api/books");
+                const books = await response.json();
+
+                if (books.length === 0) {
+                    libraryList.innerHTML = "<p>No books saved yet. Upload one above.</p>";
+                    return;
+                }
+
+                let html = "";
+                books.forEach((book) => {
+                    html += `
+                        <div class="book-card">
+                            <p><strong>${book.filename}</strong></p>
+                            <p class="chapter-meta">
+                                ${book.total_pages} pages · uploaded ${book.uploaded_at}
+                            </p>
+                            <button onclick="viewBook(${book.id})">View Chapters</button>
+                        </div>
+                    `;
+                });
+                libraryList.innerHTML = html;
+            } catch (error) {
+                libraryList.innerHTML = "<p>❌ Could not load the library.</p>";
+                console.error(error);
+            }
+        }
+
+        async function viewBook(bookId) {
+            chaptersHeader.innerHTML = "<h2>Loading...</h2>";
+            chaptersList.innerHTML = "";
+            chaptersHeader.scrollIntoView({ behavior: "smooth" });
+
+            try {
+                const response = await fetch(`/api/books/${bookId}`);
+                const data = await response.json();
+
+                const chaptersForDisplay = data.chapters.map((chap) => ({
+                    chapter_index: chap.chapter_index,
+                    title: chap.title,
+                    start_page: chap.start_page,
+                    end_page: chap.end_page,
+                    paragraph_count: chap.paragraph_count,
+                    preview: chap.content.slice(0, 250),
+                    content: chap.content,
+                    flagged: chap.flagged,
+                    flag_reason: chap.flag_reason,
+                    approved: chap.approved,
+                }));
+
+                renderChapters(bookId, data.book.filename, chaptersForDisplay);
+
+                // Check for a saved listening position and offer to resume it
+                const progressResponse = await fetch(`/api/books/${bookId}/progress`);
+                const progress = await progressResponse.json();
+                if (progress.chapter_index !== null) {
+                    const savedChapter = chaptersForDisplay.find((c) => c.chapter_index === progress.chapter_index);
+                    if (savedChapter) {
+                        const resumeHtml = `
+                            <button class="resume-btn" onclick="playChapter(${bookId}, ${progress.chapter_index}, '${savedChapter.title.replace(/'/g, "\\'")}', ${progress.chunk_index}, ${progress.position_seconds})">
+                                ▶ Continue Listening — ${savedChapter.title}
+                            </button>
+                        `;
+                        chaptersHeader.innerHTML += resumeHtml;
+                    }
+                }
+            } catch (error) {
+                chaptersHeader.innerHTML = "<h2>Error</h2>";
+                chaptersList.innerHTML = "<p>❌ Could not load this book.</p>";
+                console.error(error);
+            }
+        }
+
+        // Load the library and voice list automatically when the page opens
+        loadLibrary();
+        loadVoices();
+    </script>
+</body>
+</html>

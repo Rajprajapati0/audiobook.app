@@ -1,0 +1,239 @@
+body {
+    font-family: system-ui, sans-serif;
+    background-color: #f5f5f5;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    margin: 0;
+    padding: 2rem;
+}
+
+main {
+    background: white;
+    padding: 2rem 3rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    max-width: 700px;
+    width: 100%;
+}
+
+h1 {
+    text-align: center;
+}
+
+section {
+    margin: 1.5rem 0;
+}
+
+button {
+    padding: 0.7rem 1.4rem;
+    font-size: 1rem;
+    border: none;
+    border-radius: 8px;
+    background-color: #2563eb;
+    color: white;
+    cursor: pointer;
+    margin-top: 0.5rem;
+    margin-left: 0.5rem;
+}
+
+button:hover {
+    background-color: #1d4ed8;
+}
+
+#result, #uploadStatus {
+    margin-top: 1rem;
+    font-weight: 600;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #e5e5e5;
+    margin: 2rem 0;
+}
+
+.chapter-card {
+    background: #f8f8f8;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.7rem;
+}
+
+.chapter-meta {
+    font-size: 0.8rem;
+    color: #666;
+    margin: 0.2rem 0;
+}
+
+.chapter-preview {
+    font-size: 0.85rem;
+    color: #333;
+    margin: 0;
+}
+
+.book-card {
+    background: #f8f8f8;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.7rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.book-card button {
+    margin-left: 1rem;
+    white-space: nowrap;
+}
+
+.placeholder {
+    color: #888;
+    font-style: italic;
+}
+
+#chaptersHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#chaptersHeader h2 {
+    margin: 0;
+}
+
+.flag-badge {
+    background: #fff3cd;
+    color: #856404;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    display: inline-block;
+    margin: 0.3rem 0;
+}
+
+.full-text {
+    background: #f0f0f0;
+    padding: 1rem;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
+
+.approved-btn {
+    background-color: #16a34a !important;
+}
+
+.approved-btn:hover {
+    background-color: #15803d !important;
+}
+
+.chapter-card button {
+    margin-left: 0;
+    margin-right: 0.5rem;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    padding: 0.5rem 1rem;
+}
+
+.chunks-container {
+    margin-top: 0.8rem;
+    max-height: 350px;
+    overflow-y: auto;
+    border-top: 1px dashed #ddd;
+    padding-top: 0.5rem;
+}
+
+.chunk-card {
+    background: #eef2ff;
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 0.4rem;
+}
+
+.chunk-meta {
+    font-size: 0.75rem;
+    color: #555;
+    margin: 0 0 0.2rem 0;
+    font-weight: 600;
+}
+
+.chunk-text {
+    font-size: 0.82rem;
+    margin: 0;
+    color: #222;
+}
+
+#voiceSelect {
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    width: 100%;
+    font-size: 0.9rem;
+}
+
+.chunk-card audio {
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+.status-badge {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.5rem;
+    border-radius: 10px;
+    margin-left: 0.4rem;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+.status-pending { background: #e5e7eb; color: #374151; }
+.status-processing { background: #fef3c7; color: #92400e; }
+.status-completed { background: #d1fae5; color: #065f46; }
+.status-failed { background: #fee2e2; color: #991b1b; }
+
+.error-text {
+    color: #b91c1c;
+    font-size: 0.8rem;
+    margin: 0.2rem 0;
+}
+
+.stop-btn {
+    background-color: #dc2626 !important;
+}
+
+.stop-btn:hover {
+    background-color: #b91c1c !important;
+}
+
+.status-cancelled { background: #f3f4f6; color: #6b7280; }
+
+#playerBar {
+    background: #eff6ff;
+    border: 2px solid #93c5fd;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+}
+
+#playerBar audio {
+    width: 100%;
+    margin: 0.5rem 0;
+}
+
+#playerBar h2 {
+    margin-top: 0;
+}
+
+.resume-btn {
+    background-color: #7c3aed !important;
+    display: block;
+    margin-top: 0.6rem;
+}
+
+.resume-btn:hover {
+    background-color: #6d28d9 !important;
+}
