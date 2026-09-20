@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 from collections import Counter
 
 import fitz  # PyMuPDF
@@ -348,8 +349,24 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.get("/api/books")
 def list_books():
-    """Returns every book saved in the database so far."""
+    """Returns every book saved in the database so far, with generation progress."""
     return db.get_all_books()
+
+
+@app.delete("/api/books/{book_id}")
+def delete_book(book_id: int):
+    """Deletes a book, its chapters/chunks from the database, and its audio files from disk."""
+    book_data = db.get_book_with_chapters(book_id)
+    if not book_data:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    db.delete_book(book_id)
+
+    book_audio_dir = os.path.join(AUDIO_DIR, f"book_{book_id}")
+    if os.path.exists(book_audio_dir):
+        shutil.rmtree(book_audio_dir)
+
+    return {"message": "Book deleted."}
 
 
 @app.get("/api/books/{book_id}")
@@ -525,6 +542,13 @@ def get_progress(book_id: int):
     if not progress:
         return {"chapter_index": None, "chunk_index": None, "position_seconds": 0}
     return progress
+
+
+@app.post("/api/books/{book_id}/chapters/{chapter_index}/reset-from/{chunk_index}")
+def reset_from_chunk(book_id: int, chapter_index: int, chunk_index: int):
+    """Marks a chunk and every chunk after it for regeneration (e.g. to switch voice)."""
+    db.reset_chunks_from(book_id, chapter_index, chunk_index)
+    return {"message": f"Chunks from {chunk_index + 1} onward marked for regeneration."}
 
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio_files")

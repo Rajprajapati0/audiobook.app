@@ -115,12 +115,30 @@ def save_book(filename, total_pages, detection_method, chapters):
 
 
 def get_all_books():
+    """Returns a summary list of every book, including audio generation progress."""
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, filename, total_pages, detection_method, uploaded_at "
-            "FROM books ORDER BY uploaded_at DESC"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        rows = conn.execute("""
+            SELECT b.id, b.filename, b.total_pages, b.detection_method, b.uploaded_at,
+                   COUNT(c.id) as total_chunks,
+                   SUM(CASE WHEN c.status = 'completed' THEN 1 ELSE 0 END) as completed_chunks
+            FROM books b
+            LEFT JOIN chunks c ON c.book_id = b.id
+            GROUP BY b.id
+            ORDER BY b.uploaded_at DESC
+        """).fetchall()
+        books = [dict(row) for row in rows]
+        for book in books:
+            book["completed_chunks"] = book["completed_chunks"] or 0
+        return books
+
+
+def delete_book(book_id):
+    """Removes a book and everything associated with it from the database."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM chunks WHERE book_id = ?", (book_id,))
+        conn.execute("DELETE FROM chapters WHERE book_id = ?", (book_id,))
+        conn.execute("DELETE FROM playback_progress WHERE book_id = ?", (book_id,))
+        conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
 
 def get_book_with_chapters(book_id):
@@ -225,6 +243,25 @@ def save_playback_progress(book_id, chapter_index, chunk_index, position_seconds
 def get_playback_progress(book_id):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM playback_progress WHERE book_id = ?", (book_id,)
+            """SELECT p.*, c.title AS chapter_title
+               FROM playback_progress p
+               LEFT JOIN chapters c ON c.book_id = p.book_id AND c.chapter_index = p.chapter_index
+               WHERE p.book_id = ?""",
+            (book_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def reset_chunks_from(book_id, chapter_index, from_chunk_index):
+    """
+    Forces every chunk from from_chunk_index onward back to 'pending',
+    even if it was already 'completed' — used when the user wants to
+    regenerate a chapter's remaining audio with a different voice.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE chunks
+               SET status = 'pending', audio_path = NULL, voice = NULL, error_message = NULL
+               WHERE book_id = ? AND chapter_index = ? AND chunk_index >= ?""",
+            (book_id, chapter_index, from_chunk_index),
+        )

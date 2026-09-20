@@ -22,7 +22,7 @@
 
         <section>
             <h2>Voice</h2>
-            <select id="voiceSelect" onchange="selectedVoice = this.value"></select>
+            <select id="voiceSelect" onchange="selectedVoice = this.value; localStorage.setItem('preferredVoice', this.value);"></select>
         </section>
 
         <section id="playerBar" style="display: none;">
@@ -32,6 +32,7 @@
             <div>
                 <button onclick="playerPrevChunk()">⏮ Prev Chunk</button>
                 <button onclick="playerNextChunk()">⏭ Next Chunk</button>
+                <button onclick="switchVoiceFromHere()">🔄 Switch Voice From Here</button>
                 <label>
                     Speed:
                     <select id="speedSelect" onchange="document.getElementById('masterPlayer').playbackRate = parseFloat(this.value)">
@@ -64,7 +65,18 @@
     </main>
 
     <script>
-        let selectedVoice = "en-US-AriaNeural";
+        let selectedVoice = localStorage.getItem("preferredVoice") || "en-CA-LiamNeural";
+
+        // Whenever any <audio> element starts playing, pause every other one on the page.
+        // This covers both the individual chunk players and the main chapter player,
+        // so only one sound can ever play at a time.
+        document.addEventListener("play", (event) => {
+            document.querySelectorAll("audio").forEach((audio) => {
+                if (audio !== event.target) {
+                    audio.pause();
+                }
+            });
+        }, true); // capture phase — required because 'play' doesn't bubble
 
         const pdfInput = document.getElementById("pdfInput");
         const uploadButton = document.getElementById("uploadButton");
@@ -254,6 +266,9 @@
         }
 
         async function generateAudio(bookId, chapterIndex, chunkIndex) {
+            if (!confirm(`Generate this chunk using voice: ${selectedVoice}?\n\n(Change the Voice dropdown above first if you want a different one.)`)) {
+                return;
+            }
             const statusEl = document.getElementById(`audio-status-${chapterIndex}-${chunkIndex}`);
             const playerEl = document.getElementById(`audio-player-${chapterIndex}-${chunkIndex}`);
             statusEl.textContent = " Generating audio (this calls Microsoft's TTS service, needs internet)...";
@@ -289,6 +304,9 @@
         }
 
         async function generateChapterAudio(bookId, chapterIndex) {
+            if (!confirm(`Generate this entire chapter's audio using voice: ${selectedVoice}?\n\n(Change the Voice dropdown above first if you want a different one.)`)) {
+                return;
+            }
             const progressEl = document.getElementById(`chapter-progress-${chapterIndex}`);
             progressEl.textContent = " Starting...";
             try {
@@ -403,11 +421,32 @@
         }
 
         masterPlayer.addEventListener("ended", () => {
-            if (playerPos < playerQueue.length - 1) {
-                playerPos++;
-                loadPlayerChunk(0);
-            }
+            advanceToNextChunk();
         });
+
+        async function advanceToNextChunk() {
+            const nextIndex = playerQueue[playerPos].chunk_index + 1;
+            const response = await fetch(`/api/books/${playerBookId}/chapters/${playerChapterIndex}/chunks`);
+            const allChunks = await response.json();
+            const nextChunk = allChunks.find((c) => c.chunk_index === nextIndex);
+
+            if (!nextChunk) {
+                nowPlayingLabel.textContent = `${playerChapterTitle} — end of chapter.`;
+                return;
+            }
+
+            if (nextChunk.status === "completed" && nextChunk.audio_path) {
+                playerQueue = allChunks.filter((c) => c.status === "completed" && c.audio_path);
+                playerPos = playerQueue.findIndex((c) => c.chunk_index === nextIndex);
+                loadPlayerChunk(0);
+            } else if (nextChunk.status === "pending" || nextChunk.status === "processing") {
+                // Still being generated (e.g. after a voice switch) — check again shortly
+                nowPlayingLabel.textContent = `${playerChapterTitle} — waiting for the next part to finish generating...`;
+                setTimeout(advanceToNextChunk, 2000);
+            } else {
+                nowPlayingLabel.textContent = `${playerChapterTitle} — ⚠️ the next part failed to generate.`;
+            }
+        }
 
         function playerNextChunk() {
             if (playerPos < playerQueue.length - 1) {
@@ -447,6 +486,50 @@
             }
         }
 
+        async function switchVoiceFromHere() {
+            if (playerBookId === null || playerQueue.length === 0) {
+                alert("Nothing is playing right now.");
+                return;
+            }
+
+            const currentChunkIndex = playerQueue[playerPos].chunk_index;
+            masterPlayer.pause();
+            nowPlayingLabel.textContent = `${playerChapterTitle} — switching voice, regenerating audio...`;
+
+            try {
+                await fetch(
+                    `/api/books/${playerBookId}/chapters/${playerChapterIndex}/reset-from/${currentChunkIndex}`,
+                    { method: "POST" }
+                );
+                await fetch(
+                    `/api/books/${playerBookId}/chapters/${playerChapterIndex}/generate-chapter-audio?voice=${encodeURIComponent(selectedVoice)}`,
+                    { method: "POST" }
+                );
+                waitForChunkThenPlay(currentChunkIndex);
+            } catch (error) {
+                nowPlayingLabel.textContent = "❌ Could not switch voice.";
+                console.error(error);
+            }
+        }
+
+        function waitForChunkThenPlay(chunkIndex) {
+            const intervalId = setInterval(async () => {
+                const response = await fetch(`/api/books/${playerBookId}/chapters/${playerChapterIndex}/chunks`);
+                const allChunks = await response.json();
+                const target = allChunks.find((c) => c.chunk_index === chunkIndex);
+
+                if (target && target.status === "completed" && target.audio_path) {
+                    clearInterval(intervalId);
+                    playerQueue = allChunks.filter((c) => c.status === "completed" && c.audio_path);
+                    playerPos = playerQueue.findIndex((c) => c.chunk_index === chunkIndex);
+                    loadPlayerChunk(0);
+                } else if (target && target.status === "failed") {
+                    clearInterval(intervalId);
+                    nowPlayingLabel.textContent = "❌ Voice switch failed for this part.";
+                }
+            }, 1500);
+        }
+
         // --- Library logic ---
         const refreshLibraryButton = document.getElementById("refreshLibraryButton");
         const libraryList = document.getElementById("libraryList");
@@ -465,20 +548,61 @@
                 }
 
                 let html = "";
-                books.forEach((book) => {
+                for (const book of books) {
+                    const total = book.total_chunks || 0;
+                    const completed = book.completed_chunks || 0;
+                    const progressText = total > 0
+                        ? `${completed}/${total} chunks generated`
+                        : "Not chunked yet";
+
+                    let resumeButtonHtml = "";
+                    try {
+                        const progressResponse = await fetch(`/api/books/${book.id}/progress`);
+                        const progress = await progressResponse.json();
+                        if (progress.chapter_index !== null) {
+                            const label = progress.chapter_title || `Chapter ${progress.chapter_index + 1}`;
+                            const safeLabel = label.replace(/'/g, "\\'");
+                            resumeButtonHtml = `
+                                <button class="resume-btn" onclick="playChapter(${book.id}, ${progress.chapter_index}, '${safeLabel}', ${progress.chunk_index}, ${progress.position_seconds})">
+                                    ▶ Continue — ${label}
+                                </button>
+                            `;
+                        }
+                    } catch (e) {
+                        // No saved progress yet — that's fine, just skip the button
+                    }
+
                     html += `
                         <div class="book-card">
-                            <p><strong>${book.filename}</strong></p>
-                            <p class="chapter-meta">
-                                ${book.total_pages} pages · uploaded ${book.uploaded_at}
-                            </p>
-                            <button onclick="viewBook(${book.id})">View Chapters</button>
+                            <div>
+                                <p><strong>${book.filename}</strong></p>
+                                <p class="chapter-meta">${book.total_pages} pages · uploaded ${book.uploaded_at} · ${progressText}</p>
+                                ${resumeButtonHtml}
+                            </div>
+                            <div class="book-card-actions">
+                                <button onclick="viewBook(${book.id})">View Chapters</button>
+                                <button class="delete-btn" onclick="deleteBook(${book.id})">🗑 Delete</button>
+                            </div>
                         </div>
                     `;
-                });
+                }
                 libraryList.innerHTML = html;
             } catch (error) {
                 libraryList.innerHTML = "<p>❌ Could not load the library.</p>";
+                console.error(error);
+            }
+        }
+
+        async function deleteBook(bookId) {
+            if (!confirm("Delete this book and all its generated audio? This cannot be undone.")) {
+                return;
+            }
+            try {
+                await fetch(`/api/books/${bookId}`, { method: "DELETE" });
+                hideChapters(); // in case the deleted book was open
+                loadLibrary();
+            } catch (error) {
+                alert("Could not delete this book.");
                 console.error(error);
             }
         }
